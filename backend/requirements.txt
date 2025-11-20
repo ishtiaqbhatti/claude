@@ -15,6 +15,9 @@ httpx==0.26.0
 # Data Extraction (assuming custom package)
 # upwork-extractor==0.1.0  # Install from local or private repo
 
+# Retry Logic
+tenacity==8.2.3
+
 # Utilities
 python-dotenv==1.0.0
 python-multipart==0.0.6
