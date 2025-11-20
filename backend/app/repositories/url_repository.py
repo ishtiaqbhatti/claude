@@ -79,6 +79,34 @@ class URLRepository:
         cursor = self.collection.find({"enabled": True})
         return await cursor.to_list(length=None)
 
+    async def list_for_scraping(
+        self, min_scrape_interval_minutes: int = 60
+    ) -> List[Dict[str, Any]]:
+        """
+        Get URLs that are ready for scraping based on last scrape time.
+
+        Args:
+            min_scrape_interval_minutes: Minimum minutes between scrapes
+
+        Returns:
+            List of URLs that haven't been scraped recently
+        """
+        from datetime import timedelta
+
+        cutoff_time = datetime.now(UTC) - timedelta(minutes=min_scrape_interval_minutes)
+
+        filters = {
+            "enabled": True,
+            "$or": [
+                {"last_scraped_at": {"$exists": False}},
+                {"last_scraped_at": None},
+                {"last_scraped_at": {"$lt": cutoff_time}}
+            ]
+        }
+
+        cursor = self.collection.find(filters)
+        return await cursor.to_list(length=None)
+
     async def toggle_enabled(
         self, url_id: str, session: Optional[AsyncIOMotorClientSession] = None
     ) -> bool:

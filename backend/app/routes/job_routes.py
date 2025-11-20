@@ -101,6 +101,38 @@ async def get_related_jobs(
     }
 
 
+@router.get("/recent/discovered")
+async def get_recent_discovered_jobs(
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of jobs to return"),
+):
+    """
+    Get recently discovered jobs ordered by discovery timestamp.
+    """
+    jobs = await job_service.get_recent_discovered_jobs(limit)
+
+    return {
+        "jobs": jobs,
+        "count": len(jobs),
+    }
+
+
+@router.get("/pending/enrichment")
+async def get_jobs_pending_enrichment(
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of jobs to return"),
+):
+    """
+    Get jobs pending detail page enrichment.
+
+    Returns jobs with status=DISCOVERED that are ready for detail scraping.
+    """
+    jobs = await job_service.get_jobs_for_enrichment(limit)
+
+    return {
+        "jobs": jobs,
+        "count": len(jobs),
+    }
+
+
 @router.delete("/{uid}")
 async def delete_job(uid: str):
     """

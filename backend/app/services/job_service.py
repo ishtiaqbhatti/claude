@@ -270,3 +270,23 @@ class JobService:
         related_jobs = [j for j in jobs if j["uid"] != uid][:limit]
 
         return related_jobs
+
+    async def get_recent_discovered_jobs(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Get recently discovered jobs ordered by discovery time.
+
+        Args:
+            limit: Maximum number of jobs
+
+        Returns:
+            List of recently discovered jobs
+        """
+        from pymongo import DESCENDING
+
+        jobs, _ = await self.job_repo.search(
+            status=JobStatus.DISCOVERED,
+            limit=limit,
+            sort_by="pipeline.discovered_at",
+            sort_order=DESCENDING,
+        )
+        return jobs

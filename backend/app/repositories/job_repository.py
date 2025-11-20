@@ -199,3 +199,72 @@ class JobRepository:
             {"uid": uid}, {"$set": update_data}, session=session
         )
         return result.modified_count > 0
+
+    async def find_jobs_needing_detail(
+        self,
+        limit: int = 50,
+        max_retries: int = 3
+    ) -> List[Dict[str, Any]]:
+        """
+        Find jobs that need detail scraping.
+
+        Finds jobs with status=DISCOVERED that haven't exceeded max retry attempts.
+
+        Args:
+            limit: Maximum number of jobs to return
+            max_retries: Maximum number of retry attempts allowed
+
+        Returns:
+            List of job documents
+        """
+        filters = {
+            "status": JobStatus.DISCOVERED.value,
+            "$or": [
+                {"pipeline.optimization_retries": {"$exists": False}},
+                {"pipeline.optimization_retries": {"$lt": max_retries}}
+            ]
+        }
+
+        cursor = (
+            self.collection.find(filters)
+            .sort("pipeline.discovered_at", ASCENDING)
+            .limit(limit)
+        )
+
+        return await cursor.to_list(length=limit)
+
+    async def increment_retry_count(
+        self,
+        uid: str,
+        error_message: Optional[str] = None,
+        session: Optional[AsyncIOMotorClientSession] = None
+    ) -> bool:
+        """
+        Increment retry count for a job.
+
+        Args:
+            uid: Job UID
+            error_message: Optional error message to store
+            session: MongoDB session for transactions
+
+        Returns:
+            True if updated successfully
+        """
+        update_data = {
+            "$inc": {"pipeline.optimization_retries": 1},
+            "$set": {
+                "pipeline.last_optimization_attempt": datetime.now(UTC),
+                "updated_at": datetime.now(UTC),
+            }
+        }
+
+        if error_message:
+            update_data["$set"]["pipeline.optimization_error"] = error_message
+
+        result = await self.collection.update_one(
+            {"uid": uid},
+            update_data,
+            session=session
+        )
+
+        return result.modified_count > 0
