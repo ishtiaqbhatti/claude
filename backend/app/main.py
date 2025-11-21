@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from .config import settings, DatabaseManager
 from .routes import job_router, url_router, scraping_router, health_router
 from .utils import setup_logging
+from .middleware import RateLimitMiddleware
 
 # Setup logging
 setup_logging(level=settings.LOG_LEVEL)
@@ -65,6 +66,11 @@ app.add_middleware(
     allow_methods=settings.CORS_ALLOW_METHODS,
     allow_headers=settings.CORS_ALLOW_HEADERS,
 )
+
+# Rate limiting middleware (if enabled)
+if settings.RATE_LIMIT_ENABLED:
+    app.add_middleware(RateLimitMiddleware)
+    logger.info(f"Rate limiting enabled: {settings.RATE_LIMIT_PER_MINUTE}/min, {settings.RATE_LIMIT_PER_HOUR}/hour")
 
 
 # Exception handlers
