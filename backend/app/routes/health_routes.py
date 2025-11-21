@@ -132,17 +132,145 @@ async def get_config():
         },
         "scraping": {
             "max_concurrent_requests": settings.MAX_CONCURRENT_REQUESTS,
-            "search_page_wait_selector": settings.SEARCH_PAGE_WAIT_SELECTOR,
-            "detail_page_wait_selector": settings.DETAIL_PAGE_WAIT_SELECTOR,
+            "max_retries": settings.MAX_RETRIES,
+            "retry_delay": settings.RETRY_DELAY,
             "country": settings.SCRAPFLY_COUNTRY,
         },
         "cache": {
-            "enabled": settings.CACHE_ENABLED,
-            "ttl_seconds": settings.CACHE_TTL_SECONDS,
-            "directory": settings.CACHE_DIR,
+            "enabled": settings.ENABLE_CACHE,
+            "expiry_minutes": settings.CACHE_EXPIRY_MINUTES,
+            "directory": str(settings.CACHE_DIR),
         },
         "sse": {
+            "heartbeat_interval": settings.SSE_HEARTBEAT_INTERVAL,
             "retry_timeout": settings.SSE_RETRY_TIMEOUT,
-            "keepalive_interval": settings.SSE_KEEPALIVE_INTERVAL,
         },
     }
+
+
+@router.get("/status")
+async def get_comprehensive_status():
+    """
+    Comprehensive status endpoint with all system information.
+
+    Includes:
+    - Service health
+    - Database connectivity
+    - Scrapfly account info
+    - Cache statistics
+    - API key rotation status
+    - SSE connection stats
+    - Recent scraping activity
+    """
+    from ..repositories import (
+        JobRepository,
+        URLRepository,
+        ScrapeRunRepository,
+    )
+    from ..integrations import ScrapflyClient
+    from ..infrastructure.sse_manager import sse_manager
+
+    status = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "service": {
+            "name": settings.APP_NAME,
+            "version": settings.APP_VERSION,
+            "status": "healthy",
+        },
+    }
+
+    # Database connectivity
+    try:
+        db_healthy = await DatabaseManager.health_check()
+        status["database"] = {
+            "connected": db_healthy,
+            "name": settings.DATABASE_NAME,
+            "uri": settings.MONGODB_URI.split('@')[-1] if '@' in settings.MONGODB_URI else "local",
+        }
+    except Exception as e:
+        status["database"] = {
+            "connected": False,
+            "error": str(e),
+        }
+        status["service"]["status"] = "degraded"
+
+    # Scrapfly client info
+    try:
+        scrapfly_client = ScrapflyClient()
+        await scrapfly_client.initialize()
+
+        # Get account info
+        account_info = await scrapfly_client.get_account_info()
+        client_stats = scrapfly_client.get_client_stats()
+
+        status["scrapfly"] = {
+            "connected": account_info is not None,
+            "account": account_info if account_info else {"error": "Failed to fetch account info"},
+            "client_stats": client_stats,
+        }
+
+        await scrapfly_client.close()
+
+    except Exception as e:
+        status["scrapfly"] = {
+            "connected": False,
+            "error": str(e),
+        }
+        status["service"]["status"] = "degraded"
+
+    # SSE Manager stats
+    try:
+        status["sse"] = {
+            "active_connections": sse_manager.get_active_connections_count(),
+            "heartbeat_interval": settings.SSE_HEARTBEAT_INTERVAL,
+        }
+    except Exception as e:
+        status["sse"] = {
+            "error": str(e),
+        }
+
+    # Recent scraping activity
+    try:
+        scrape_repo = ScrapeRunRepository()
+        recent_runs = await scrape_repo.get_recent_runs(limit=5)
+        active_runs = await scrape_repo.get_active_runs()
+
+        status["scraping"] = {
+            "active_runs": len(active_runs),
+            "recent_runs_count": len(recent_runs),
+            "recent_runs": [
+                {
+                    "run_id": run["run_id"],
+                    "run_type": run["run_type"],
+                    "status": run["status"],
+                    "started_at": run["started_at"].isoformat() if isinstance(run.get("started_at"), datetime) else run.get("started_at"),
+                }
+                for run in recent_runs
+            ] if recent_runs else [],
+        }
+    except Exception as e:
+        status["scraping"] = {
+            "error": str(e),
+        }
+
+    # Job statistics
+    try:
+        job_repo = JobRepository()
+        job_stats = await job_repo.get_stats()
+        status["jobs"] = job_stats
+    except Exception as e:
+        status["jobs"] = {
+            "error": str(e),
+        }
+
+    # URL statistics
+    try:
+        url_repo = URLRepository()
+        url_stats = await url_repo.get_stats()
+        status["urls"] = url_stats
+    except Exception as e:
+        status["urls"] = {
+            "error": str(e),
+        }
+
+    return status

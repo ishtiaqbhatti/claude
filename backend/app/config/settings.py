@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     # Upwork
     UPWORK_BASE_URL: str = "https://www.upwork.com"
     UPWORK_SEARCH_PAGE_JOB_COUNT: int = 50
+    SEARCH_PAGE_WAIT_SELECTOR: str = "[data-qa='job-tile']"
+    DETAIL_PAGE_WAIT_SELECTOR: str = "[data-qa='job-description']"
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 

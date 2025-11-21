@@ -1,11 +1,20 @@
 """Scraping service for orchestrating web scraping operations."""
 import asyncio
 import logging
+import re
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 from collections.abc import AsyncIterator
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    before_sleep_log,
+)
 
-from ..config import DatabaseManager
+from ..config import DatabaseManager, settings
 from ..models import JobModel, JobStatus, ClientModel, SkillModel, ScrapeRunModel, ScrapeErrorLog, PipelineModel
 from ..repositories import (
     JobRepository,
@@ -15,6 +24,7 @@ from ..repositories import (
     ScrapeRunRepository,
 )
 from ..integrations import ScrapflyClient, UpworkExtractorClient
+from ..infrastructure.sse_manager import sse_manager
 
 logger = logging.getLogger(__name__)
 
@@ -102,8 +112,18 @@ class ScrapingService:
                 }
 
                 try:
-                    # Scrape search page
-                    html_content = await self.scrapfly.scrape_search_page(url)
+                    # Send progress via SSEManager
+                    await sse_manager.send_scraping_progress(
+                        run_id=scrape_run.run_id,
+                        progress_percentage=(idx / total_urls) * 100,
+                        current_item=url,
+                        total_items=total_urls,
+                        processed_items=idx,
+                        status_message=f"Scraping search page: {url_doc.get('name', url)}",
+                    )
+
+                    # Scrape search page with retry
+                    html_content = await self._scrape_with_retry(url, "search")
 
                     if not html_content:
                         error = ScrapeErrorLog(
@@ -112,7 +132,14 @@ class ScrapingService:
                         )
                         await self.scrape_run_repo.add_error(scrape_run.run_id, error)
                         await self.url_repo.update_last_error(url_id, "Failed to scrape")
+                        await sse_manager.send_error(
+                            run_id=scrape_run.run_id,
+                            error=f"Failed to scrape URL: {url}",
+                        )
                         continue
+
+                    # Archive raw HTML
+                    self._save_raw_html_to_file(html_content, url_id, "search")
 
                     # Extract jobs
                     jobs_data = self.extractor.extract_search_results(html_content)
@@ -167,6 +194,17 @@ class ScrapingService:
 
             # Get final stats
             final_run = await self.scrape_run_repo.find_by_run_id(scrape_run.run_id)
+
+            # Send completion via SSEManager
+            await sse_manager.send_completion(
+                run_id=scrape_run.run_id,
+                results={
+                    "jobs_found": final_run.get("jobs_found", 0),
+                    "jobs_new": final_run.get("jobs_new", 0),
+                    "jobs_updated": final_run.get("jobs_updated", 0),
+                },
+                status="completed"
+            )
 
             yield {
                 "event": "run_completed",
@@ -255,11 +293,21 @@ class ScrapingService:
                 }
 
                 try:
+                    # Send progress via SSEManager
+                    await sse_manager.send_scraping_progress(
+                        run_id=scrape_run.run_id,
+                        progress_percentage=(idx / total_jobs) * 100,
+                        current_item=job_uid,
+                        total_items=total_jobs,
+                        processed_items=idx,
+                        status_message=f"Scraping job detail: {job_uid}",
+                    )
+
                     # Update status to scraping
                     await self.job_repo.update_status(job_uid, JobStatus.SCRAPING_DETAIL)
 
-                    # Scrape detail page
-                    html_content = await self.scrapfly.scrape_detail_page(job_url)
+                    # Scrape detail page with retry
+                    html_content = await self._scrape_with_retry(job_url, "detail")
 
                     if not html_content:
                         await self.job_repo.update_status(job_uid, JobStatus.DETAIL_FAILED)
@@ -269,7 +317,14 @@ class ScrapingService:
                         )
                         await self.scrape_run_repo.add_error(scrape_run.run_id, error)
                         await self.scrape_run_repo.increment_counters(scrape_run.run_id, jobs_failed=1)
+                        await sse_manager.send_error(
+                            run_id=scrape_run.run_id,
+                            error=f"Failed to scrape job: {job_uid}",
+                        )
                         continue
+
+                    # Archive raw HTML
+                    self._save_raw_html_to_file(html_content, job_uid, "detail")
 
                     # Extract job detail
                     job_detail = self.extractor.extract_job_detail(html_content)
@@ -317,6 +372,16 @@ class ScrapingService:
             # Get final stats
             final_run = await self.scrape_run_repo.find_by_run_id(scrape_run.run_id)
 
+            # Send completion via SSEManager
+            await sse_manager.send_completion(
+                run_id=scrape_run.run_id,
+                results={
+                    "jobs_updated": final_run.get("jobs_updated", 0),
+                    "jobs_failed": final_run.get("jobs_failed", 0),
+                },
+                status="completed"
+            )
+
             yield {
                 "event": "run_completed",
                 "data": {
@@ -330,6 +395,10 @@ class ScrapingService:
         except Exception as e:
             logger.error(f"Error in detail scrape: {e}")
             await self.scrape_run_repo.update_status(scrape_run.run_id, "failed")
+            await sse_manager.send_error(
+                run_id=scrape_run.run_id,
+                error=str(e),
+            )
             yield {
                 "event": "run_failed",
                 "data": {"run_id": scrape_run.run_id, "error": str(e)},
@@ -432,3 +501,201 @@ class ScrapingService:
 
         await self.job_repo.update(job_uid, update_data)
         await self.job_repo.mark_as_enriched(job_uid)
+
+    # ==================== Helper Methods ====================
+
+    def _save_raw_html_to_file(
+        self,
+        html_content: str,
+        job_uid: str,
+        page_type: str = "detail"
+    ) -> Optional[Path]:
+        """
+        Save raw HTML to file for debugging and analysis.
+
+        Args:
+            html_content: Raw HTML content
+            job_uid: Job UID (used for filename)
+            page_type: Type of page (search, detail, etc.)
+
+        Returns:
+            Path to saved file or None if failed
+        """
+        try:
+            # Create directory structure: cache/html/YYYY-MM-DD/page_type/
+            date_str = datetime.now(UTC).strftime("%Y-%m-%d")
+            html_dir = settings.CACHE_DIR / "html" / date_str / page_type
+            html_dir.mkdir(parents=True, exist_ok=True)
+
+            # Clean job_uid for filename (remove special chars)
+            clean_uid = re.sub(r'[^\w\-]', '_', job_uid)
+            timestamp = datetime.now(UTC).strftime("%H%M%S")
+            filename = f"{clean_uid}_{timestamp}.html"
+            file_path = html_dir / filename
+
+            # Write HTML to file
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+
+            logger.debug(f"Saved raw HTML to {file_path}")
+            return file_path
+
+        except Exception as e:
+            logger.error(f"Error saving raw HTML for {job_uid}: {e}")
+            return None
+
+    def _decode_engagement(self, engagement_value: Optional[str]) -> Optional[str]:
+        """
+        Decode Upwork engagement type from encoded value.
+
+        Args:
+            engagement_value: Raw engagement value from Upwork
+
+        Returns:
+            Decoded engagement type or None
+        """
+        if not engagement_value:
+            return None
+
+        # Common Upwork engagement mappings
+        engagement_map = {
+            "1": "One-time project",
+            "2": "Ongoing project",
+            "3": "Complex project",
+            "4": "Not sure",
+        }
+
+        # Try direct mapping
+        if engagement_value in engagement_map:
+            return engagement_map[engagement_value]
+
+        # Try pattern matching for encoded values
+        if "ongoing" in engagement_value.lower():
+            return "Ongoing project"
+        elif "one" in engagement_value.lower() or "single" in engagement_value.lower():
+            return "One-time project"
+        elif "complex" in engagement_value.lower():
+            return "Complex project"
+
+        # Return as-is if no match
+        logger.debug(f"Unknown engagement value: {engagement_value}")
+        return engagement_value
+
+    def _decode_tier(self, tier_value: Optional[str]) -> Optional[str]:
+        """
+        Decode Upwork client tier from encoded value.
+
+        Args:
+            tier_value: Raw tier value from Upwork
+
+        Returns:
+            Decoded tier name or None
+        """
+        if not tier_value:
+            return None
+
+        # Common Upwork tier mappings
+        tier_map = {
+            "1": "Basic",
+            "2": "Plus",
+            "3": "Enterprise",
+            "UNSET": "No tier",
+            "PAYMENT_UNVERIFIED": "Payment unverified",
+        }
+
+        # Try direct mapping
+        tier_upper = tier_value.upper()
+        if tier_upper in tier_map:
+            return tier_map[tier_upper]
+
+        # Pattern matching
+        if "plus" in tier_value.lower():
+            return "Plus"
+        elif "enterprise" in tier_value.lower():
+            return "Enterprise"
+        elif "basic" in tier_value.lower():
+            return "Basic"
+
+        # Return as-is if no match
+        logger.debug(f"Unknown tier value: {tier_value}")
+        return tier_value
+
+    def _extract_search_position(
+        self, job_data: Dict[str, Any], search_context: Optional[Dict[str, Any]] = None
+    ) -> Optional[int]:
+        """
+        Extract job's search position/ranking from search results.
+
+        Args:
+            job_data: Job data dictionary
+            search_context: Optional context with page number and position
+
+        Returns:
+            Search position (1-based) or None
+        """
+        # If explicit position provided in job data
+        if "search_position" in job_data:
+            return job_data["search_position"]
+
+        # Calculate from search context
+        if search_context:
+            page = search_context.get("page", 1)
+            position_in_page = search_context.get("position_in_page", 0)
+            jobs_per_page = search_context.get("jobs_per_page", 50)
+
+            # Calculate absolute position
+            return (page - 1) * jobs_per_page + position_in_page + 1
+
+        # Try to extract from job data metadata
+        if "metadata" in job_data:
+            metadata = job_data["metadata"]
+            if isinstance(metadata, dict) and "position" in metadata:
+                return metadata["position"]
+
+        return None
+
+    # ==================== Retry Decorators ====================
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((asyncio.TimeoutError, ConnectionError)),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
+    async def _scrape_with_retry(self, url: str, scrape_type: str = "search") -> Optional[str]:
+        """
+        Scrape URL with automatic retry on transient failures.
+
+        Args:
+            url: URL to scrape
+            scrape_type: Type of scraping (search or detail)
+
+        Returns:
+            HTML content or None if failed
+        """
+        if scrape_type == "detail":
+            return await self.scrapfly.scrape_detail_page(url)
+        else:
+            return await self.scrapfly.scrape_search_page(url)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=5),
+        retry=retry_if_exception_type((ConnectionError, asyncio.TimeoutError)),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
+    async def _db_operation_with_retry(self, operation_func, *args, **kwargs):
+        """
+        Execute database operation with automatic retry.
+
+        Args:
+            operation_func: Async function to execute
+            *args: Positional arguments for the function
+            **kwargs: Keyword arguments for the function
+
+        Returns:
+            Result of the operation
+        """
+        return await operation_func(*args, **kwargs)
