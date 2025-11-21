@@ -8,10 +8,14 @@ __all__ = [
     "JobResponse",
     "JobListResponse",
     "JobSearchQuery",
+    "JobDetailResponse",
+    "JobStatsResponse",
     # URL schemas
     "URLCreate",
     "URLUpdate",
     "URLResponse",
+    "URLListResponse",
+    "URLStatsResponse",
     # Scraping schemas
     "StartSearchScrapeRequest",
     "StartDetailScrapeRequest",

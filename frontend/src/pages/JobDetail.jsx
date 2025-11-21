@@ -22,15 +22,24 @@ export function JobDetail() {
       setIsLoading(true);
       await fetchJobById(uid);
       setIsLoading(false);
-
-      // Auto-start scrape if scrape=true in URL
-      if (searchParams.get('scrape') === 'true' && selectedJob?.status === 'discovered') {
-        handleScrapeDetail();
-      }
     };
 
     loadJob();
-  }, [uid]);
+  }, [uid, fetchJobById]);
+
+  // Auto-start scrape if scrape=true in URL (separate effect to avoid race condition)
+  useEffect(() => {
+    if (!isLoading && selectedJob && searchParams.get('scrape') === 'true' && selectedJob.status === 'discovered' && !isRunning) {
+      const handleAutoScrape = async () => {
+        await startScrape([uid]);
+        toast({
+          title: 'Auto-scraping started',
+          description: 'Fetching job details...',
+        });
+      };
+      handleAutoScrape();
+    }
+  }, [isLoading, selectedJob, searchParams, isRunning, uid, startScrape]);
 
   // Listen for scraping events
   useEffect(() => {

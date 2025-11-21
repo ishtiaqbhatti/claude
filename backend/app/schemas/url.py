@@ -1,5 +1,5 @@
 """URL API schemas."""
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, HttpUrl, Field
 
 
@@ -28,3 +28,21 @@ class URLResponse(BaseModel):
     category: Optional[str] = None
     total_jobs_found: int
     last_scraped_at: Optional[str] = None
+
+
+class URLListResponse(BaseModel):
+    """Paginated URL list response."""
+    urls: List[Dict[str, Any]]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class URLStatsResponse(BaseModel):
+    """URL statistics response schema."""
+    total: int = 0
+    enabled: int = 0
+    disabled: int = 0
+    total_jobs_found: int = 0
+    total_scrapes: int = 0

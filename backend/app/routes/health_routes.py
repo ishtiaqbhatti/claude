@@ -35,8 +35,8 @@ async def readiness_check():
 
     # Check database
     try:
-        db_healthy = await DatabaseManager.health_check()
-        checks["database"] = db_healthy
+        db_health = await DatabaseManager.health_check()
+        checks["database"] = db_health.get("status") == "connected"
     except Exception as e:
         checks["database"] = False
         checks["database_error"] = str(e)
@@ -181,11 +181,12 @@ async def get_comprehensive_status():
 
     # Database connectivity
     try:
-        db_healthy = await DatabaseManager.health_check()
+        db_health = await DatabaseManager.health_check()
         status["database"] = {
-            "connected": db_healthy,
+            "connected": db_health.get("status") == "connected",
             "name": settings.DATABASE_NAME,
             "uri": settings.MONGODB_URI.split('@')[-1] if '@' in settings.MONGODB_URI else "local",
+            "health": db_health,
         }
     except Exception as e:
         status["database"] = {

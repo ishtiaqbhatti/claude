@@ -17,6 +17,7 @@ export function useSSE(endpoint, options = {}) {
   const [status, setStatus] = useState('idle'); // idle, connecting, connected, error, complete
   const [events, setEvents] = useState([]);
   const eventSourceRef = useRef(null);
+  const MAX_EVENTS = 100; // Limit events array to prevent memory leak
 
   useEffect(() => {
     if (!enabled || !endpoint) {
@@ -64,9 +65,13 @@ export function useSSE(endpoint, options = {}) {
       eventSource.addEventListener(eventType, (e) => {
         try {
           const data = JSON.parse(e.data);
-          const event = { type: eventType, data };
+          const event = { type: eventType, data, timestamp: Date.now(), id: `${eventType}-${Date.now()}-${Math.random()}` };
 
-          setEvents((prev) => [...prev, event]);
+          // Limit events array size to prevent memory leak
+          setEvents((prev) => {
+            const newEvents = [...prev, event];
+            return newEvents.slice(-MAX_EVENTS); // Keep only last MAX_EVENTS events
+          });
           onEvent(event);
 
           // Handle completion events
@@ -97,7 +102,7 @@ export function useSSE(endpoint, options = {}) {
         eventSource.close();
       }
     };
-  }, [endpoint, enabled]);
+  }, [endpoint, enabled, onEvent, onComplete, onError]);
 
   const close = () => {
     if (eventSourceRef.current) {

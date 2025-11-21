@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { PlayCircle, Loader2, Database, Link as LinkIcon, Briefcase } from 'lucide-react';
 import { useStore } from '../store/useStore';
@@ -25,6 +25,10 @@ export function Dashboard() {
   const searchScrape = useSearchScrape();
   const detailScrape = useDetailScrape();
 
+  // Track processed events to prevent duplicate processing (race condition fix)
+  const processedSearchEvents = useRef(new Set());
+  const processedDetailEvents = useRef(new Set());
+
   useEffect(() => {
     fetchUrlStats();
     fetchJobStats();
@@ -32,9 +36,15 @@ export function Dashboard() {
     fetchJobs({ page: 1, page_size: 10, sort_order: 'desc' });
   }, [fetchUrlStats, fetchJobStats, fetchUrls, fetchJobs]);
 
-  // Handle search scrape events
+  // Handle search scrape events (with race condition fix)
   useEffect(() => {
     searchScrape.events.forEach((event) => {
+      // Skip if already processed
+      if (processedSearchEvents.current.has(event.id)) {
+        return;
+      }
+      processedSearchEvents.current.add(event.id);
+
       if (event.type === 'url_started') {
         toast({
           title: 'Scraping URL',
@@ -58,11 +68,17 @@ export function Dashboard() {
         fetchUrlStats();
       }
     });
-  }, [searchScrape.events]);
+  }, [searchScrape.events, fetchJobStats, fetchJobs, fetchUrlStats]);
 
-  // Handle detail scrape events
+  // Handle detail scrape events (with race condition fix)
   useEffect(() => {
     detailScrape.events.forEach((event) => {
+      // Skip if already processed
+      if (processedDetailEvents.current.has(event.id)) {
+        return;
+      }
+      processedDetailEvents.current.add(event.id);
+
       if (event.type === 'job_started') {
         const uid = event.data.job_uid;
         updateJob(uid, { status: 'scraping_detail' });
@@ -83,7 +99,7 @@ export function Dashboard() {
         fetchJobStats();
       }
     });
-  }, [detailScrape.events]);
+  }, [detailScrape.events, updateJob, fetchJobStats]);
 
   const handleStartSearchScrape = async () => {
     if (urls.length === 0) {

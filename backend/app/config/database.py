@@ -66,6 +66,13 @@ class DatabaseManager:
         return cls._database
 
     @classmethod
+    def get_collection(cls, collection_name: str):
+        """Get collection instance synchronously."""
+        if not cls._database:
+            raise ConnectionError("Database not connected. Call connect() first.")
+        return cls._database[collection_name]
+
+    @classmethod
     async def _create_indexes(cls) -> None:
         """Create database indexes."""
         db = await cls.get_database()

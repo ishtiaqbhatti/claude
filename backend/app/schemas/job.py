@@ -35,3 +35,17 @@ class JobListResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+
+class JobDetailResponse(BaseModel):
+    """Detailed job response schema."""
+    job: Dict[str, Any]
+
+
+class JobStatsResponse(BaseModel):
+    """Job statistics response schema."""
+    total: int = 0
+    by_status: Dict[str, int] = Field(default_factory=dict)
+    enriched: int = 0
+    discovered: int = 0
+    failed: int = 0

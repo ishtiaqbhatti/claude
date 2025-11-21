@@ -6,6 +6,7 @@ import { JobDetail } from './pages/JobDetail';
 import { URLManagement } from './pages/URLManagement';
 import { Toaster } from './components/ui/toaster';
 import { cn } from './lib/utils';
+import ErrorBoundary from './components/ErrorBoundary';
 
 function Navigation() {
   const location = useLocation();
@@ -69,17 +70,19 @@ function AppLayout({ children }) {
 
 function App() {
   return (
-    <BrowserRouter>
-      <AppLayout>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/jobs" element={<Jobs />} />
-          <Route path="/jobs/:uid" element={<JobDetail />} />
-          <Route path="/urls" element={<URLManagement />} />
-        </Routes>
-      </AppLayout>
-      <Toaster />
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <AppLayout>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/jobs" element={<Jobs />} />
+            <Route path="/jobs/:uid" element={<JobDetail />} />
+            <Route path="/urls" element={<URLManagement />} />
+          </Routes>
+        </AppLayout>
+        <Toaster />
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }
 

@@ -36,6 +36,13 @@ class Settings(BaseSettings):
 
     # CORS
     CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
+    CORS_ALLOW_CREDENTIALS: bool = True
+    CORS_ALLOW_METHODS: List[str] = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+    CORS_ALLOW_HEADERS: List[str] = ["Content-Type", "Authorization", "X-Requested-With", "X-API-Key"]
+
+    # Authentication
+    API_KEY_ENABLED: bool = False  # Set to True to enable API key auth
+    API_KEYS: List[str] = []  # Add your API keys here or via env as comma-separated
 
     # Paths
     BASE_DIR: Path = Path(__file__).resolve().parent.parent.parent
