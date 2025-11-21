@@ -109,9 +109,12 @@ class ClientRepository:
         filters: Dict[str, Any] = {}
 
         if query:
+            # Escape regex special characters to prevent injection
+            import re
+            escaped_query = re.escape(query)
             filters["$or"] = [
-                {"company": {"$regex": query, "$options": "i"}},
-                {"city": {"$regex": query, "$options": "i"}},
+                {"company": {"$regex": escaped_query, "$options": "i"}},
+                {"city": {"$regex": escaped_query, "$options": "i"}},
             ]
 
         if country:

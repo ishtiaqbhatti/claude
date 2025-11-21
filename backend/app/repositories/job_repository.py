@@ -88,9 +88,12 @@ class JobRepository:
         filters: Dict[str, Any] = {}
 
         if query:
+            # Escape regex special characters to prevent injection
+            import re
+            escaped_query = re.escape(query)
             filters["$or"] = [
-                {"title": {"$regex": query, "$options": "i"}},
-                {"content.description_plain": {"$regex": query, "$options": "i"}},
+                {"title": {"$regex": escaped_query, "$options": "i"}},
+                {"content.description_plain": {"$regex": escaped_query, "$options": "i"}},
             ]
 
         if status:

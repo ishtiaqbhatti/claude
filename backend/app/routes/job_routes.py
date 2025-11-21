@@ -153,6 +153,15 @@ async def update_job_status(uid: str, status: str):
 
     Valid statuses: discovered, scraping_detail, enriched, private_job, detail_failed, extraction_failed, deleted
     """
+    # Input validation: Verify status is valid
+    from ..models import JobStatus
+    valid_statuses = [s.value for s in JobStatus]
+    if status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{status}'. Valid statuses: {', '.join(valid_statuses)}",
+        )
+
     updated = await job_service.update_job_status(uid, status)
 
     if not updated:
@@ -169,6 +178,21 @@ async def bulk_update_status(uids: List[str], status: str):
     """
     Bulk update job statuses.
     """
+    # Input validation: Verify status is valid
+    from ..models import JobStatus
+    valid_statuses = [s.value for s in JobStatus]
+    if status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{status}'. Valid statuses: {', '.join(valid_statuses)}",
+        )
+
+    # Input validation: Ensure uids list is not empty and reasonable size
+    if not uids:
+        raise HTTPException(status_code=400, detail="No job UIDs provided")
+    if len(uids) > 1000:  # Reasonable limit to prevent abuse
+        raise HTTPException(status_code=400, detail="Too many job UIDs (max 1000)")
+
     count = await job_service.bulk_update_status(uids, status)
 
     return {
